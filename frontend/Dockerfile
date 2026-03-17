@@ -1,9 +1,13 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+# Cache npm downloads between builds
+RUN --mount=type=cache,target=/root/.npm \
+    npm install
 COPY . .
-RUN npm run build
+# Cache Next.js incremental build output between builds
+RUN --mount=type=cache,target=/app/.next/cache \
+    npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app

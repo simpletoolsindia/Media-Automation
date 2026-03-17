@@ -6,22 +6,30 @@ on:
     tags: ["v*.*.*"]
   release:
     types: [published]
-  workflow_dispatch:         # allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 env:
   BACKEND_IMAGE: simpletoolsindia/media-organizor-backend
   FRONTEND_IMAGE: simpletoolsindia/media-organizor-frontend
 
 jobs:
-  # ── Backend ──────────────────────────────────────────────────────────────────
+  # ── Backend ────────────────────────────────────────────────────────────────
   backend:
-    name: Backend Docker Image
-    runs-on: ubuntu-latest
+    name: Backend — ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm   # native arm64 runner — no QEMU slowdown
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Docker meta (tags + labels)
+      - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -33,9 +41,6 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -45,27 +50,36 @@ jobs:
           username: ${{ secrets.DOCKER_USER_NAME }}
           password: ${{ secrets.DOCKER_API_TOKEN }}
 
-      - name: Build & push backend
+      - name: Build & push backend (${{ matrix.platform }})
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./backend
           file: ./backend/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=backend-${{ matrix.platform }}
+          cache-to: type=gha,scope=backend-${{ matrix.platform }},mode=max
 
-  # ── Frontend ─────────────────────────────────────────────────────────────────
+  # ── Frontend ───────────────────────────────────────────────────────────────
   frontend:
-    name: Frontend Docker Image
-    runs-on: ubuntu-latest
+    name: Frontend — ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm   # native arm64 runner — no QEMU slowdown
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Docker meta (tags + labels)
+      - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -77,9 +91,6 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -89,21 +100,22 @@ jobs:
           username: ${{ secrets.DOCKER_USER_NAME }}
           password: ${{ secrets.DOCKER_API_TOKEN }}
 
-      - name: Build & push frontend
+      - name: Build & push frontend (${{ matrix.platform }})
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=frontend-${{ matrix.platform }}
+          cache-to: type=gha,scope=frontend-${{ matrix.platform }},mode=max
           build-args: |
             BACKEND_URL=http://backend:8000
 
-  # ── Update Docker Hub description ────────────────────────────────────────────
+  # ── Update Docker Hub description ─────────────────────────────────────────
   dockerhub-description:
     name: Update Docker Hub README
     runs-on: ubuntu-latest
