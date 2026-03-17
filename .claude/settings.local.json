@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(mkdir -p \"/Users/sridhar/projects/media organizor/backend/app/models\" \"/Users/sridhar/projects/media organizor/backend/app/agents\" \"/Users/sridhar/projects/media organizor/backend/app/services\" \"/Users/sridhar/projects/media organizor/backend/app/api/routes\")",
+      "Bash(mkdir -p \"/Users/sridhar/projects/media organizor/frontend/src/app/requests\" \"/Users/sridhar/projects/media organizor/frontend/src/app/downloads\" \"/Users/sridhar/projects/media organizor/frontend/src/app/organizer\" \"/Users/sridhar/projects/media organizor/frontend/src/app/chat\" \"/Users/sridhar/projects/media organizor/frontend/src/app/settings\")",
+      "Bash(mkdir -p \"/Users/sridhar/projects/media organizor/frontend/src/components/Dashboard\" \"/Users/sridhar/projects/media organizor/frontend/src/components/Downloads\" \"/Users/sridhar/projects/media organizor/frontend/src/components/Chat\")",
+      "Bash(mkdir -p \"/Users/sridhar/projects/media organizor/frontend/src/lib\")",
+      "Bash(docker login:*)",
+      "Bash(docker build:*)",
+      "Bash(colima start:*)",
+      "Bash(docker push:*)"
+    ]
+  }
+}

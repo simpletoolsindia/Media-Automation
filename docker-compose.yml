@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "1112:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U media"]
       interval: 10s
@@ -23,6 +23,8 @@ services:
     image: redis:7-alpine
     volumes:
       - redis_data:/data
+    ports:
+      - "1113:6379"
     restart: unless-stopped
 
   backend:
@@ -31,7 +33,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "1114:8000"
     volumes:
       - media_data:/media
       - download_data:/downloads
@@ -53,14 +55,15 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "1115:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - BACKEND_URL=http://backend:8000
     depends_on:
       - backend
     restart: unless-stopped
 
-  # ── Media Stack (optional — comment out if you have existing services) ────
+  # ── Media Stack (optional) ─────────────────────────────────────────────────
+  # Run with: docker compose --profile full up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     environment:
@@ -72,9 +75,9 @@ services:
       - qbittorrent_config:/config
       - download_data:/downloads
     ports:
-      - "8080:8080"
-      - "6881:6881"
-      - "6881:6881/udp"
+      - "1116:8080"
+      - "1117:6881"
+      - "1117:6881/udp"
     restart: unless-stopped
     profiles:
       - full
@@ -88,7 +91,7 @@ services:
     volumes:
       - prowlarr_data:/config
     ports:
-      - "9696:9696"
+      - "1118:9696"
     restart: unless-stopped
     profiles:
       - full
@@ -99,7 +102,7 @@ services:
       - jellyfin_config:/config
       - media_data:/media:ro
     ports:
-      - "8096:8096"
+      - "1119:8096"
     restart: unless-stopped
     profiles:
       - full
