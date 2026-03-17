@@ -25,15 +25,16 @@ type SvcState = {
   url: string;
   username: string;
   password: string;
+  apiKey: string;
   error: string;
   validating: boolean;
   connected: boolean;
 };
 
 const SVC_DEFS = [
-  { id: "qbittorrent", label: "qBittorrent", desc: "Download client for torrents", needsCreds: true,  defaultUrl: "http://localhost:1116" },
-  { id: "prowlarr",    label: "Prowlarr",    desc: "Indexer / search aggregator",   needsCreds: false, defaultUrl: "http://localhost:1118" },
-  { id: "jellyfin",    label: "Jellyfin",    desc: "Media server & player",         needsCreds: false, defaultUrl: "http://localhost:1119" },
+  { id: "qbittorrent", label: "qBittorrent", desc: "Download client for torrents", needsCreds: true,  needsApiKey: false, defaultUrl: "http://localhost:1116" },
+  { id: "prowlarr",    label: "Prowlarr",    desc: "Indexer / search aggregator",   needsCreds: false, needsApiKey: false, defaultUrl: "http://localhost:1118" },
+  { id: "jellyfin",    label: "Jellyfin",    desc: "Media server & player",         needsCreds: false, needsApiKey: true,  defaultUrl: "http://localhost:1119" },
 ];
 
 const STEPS = ["AI Provider", "Services", "Storage", "Done"];
@@ -68,7 +69,7 @@ export default function SetupPage() {
   // Step 1 — Services
   const [svcs, setSvcs] = useState<Record<string, SvcState>>(() =>
     Object.fromEntries(
-      SVC_DEFS.map((s) => [s.id, { mode: "detecting", url: s.defaultUrl, username: "admin", password: "adminadmin", error: "", validating: false, connected: false }])
+      SVC_DEFS.map((s) => [s.id, { mode: "detecting", url: s.defaultUrl, username: "admin", password: "adminadmin", apiKey: "", error: "", validating: false, connected: false }])
     )
   );
 
@@ -176,8 +177,10 @@ export default function SetupPage() {
           updates.qbittorrent_url = s.url;
         if (svc.id === "prowlarr" && (s.connected || s.mode === "done"))
           updates.prowlarr_url = s.url;
-        if (svc.id === "jellyfin" && (s.connected || s.mode === "done"))
+        if (svc.id === "jellyfin" && (s.connected || s.mode === "done")) {
           updates.jellyfin_url = s.url;
+          if (s.apiKey) updates.jellyfin_api_key = s.apiKey;
+        }
         if (Object.keys(updates).length) {
           await fetch("/api/settings/general", {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -334,6 +337,10 @@ export default function SetupPage() {
                                 className="bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-500" />
                             </div>
                           )}
+                          {svc.needsApiKey && (
+                            <input type="password" placeholder="API Key (optional — Dashboard → API Keys)" value={s.apiKey} onChange={(e) => updateSvc(svc.id, { apiKey: e.target.value })}
+                              className="w-full bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-500" />
+                          )}
                           {s.error && <p className="text-red-400 text-xs">{s.error}</p>}
                           <div className="flex gap-2">
                             <button onClick={() => validateSvc(svc.id)} disabled={s.validating}
@@ -384,6 +391,10 @@ export default function SetupPage() {
                               <input type="password" placeholder="Password" value={s.password} onChange={(e) => updateSvc(svc.id, { password: e.target.value })}
                                 className="bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-500" />
                             </div>
+                          )}
+                          {svc.needsApiKey && (
+                            <input type="password" placeholder="API Key (optional — Dashboard → API Keys)" value={s.apiKey} onChange={(e) => updateSvc(svc.id, { apiKey: e.target.value })}
+                              className="w-full bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-500" />
                           )}
                           {s.error && <p className="text-red-400 text-xs">{s.error}</p>}
                           <div className="flex gap-2">
