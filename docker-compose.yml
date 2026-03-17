@@ -37,11 +37,12 @@ services:
     volumes:
       - media_data:/media
       - download_data:/downloads
-      - ./backend/.env:/app/.env
+      - app_data:/app/data
     environment:
       - DATABASE_URL_SYNC=postgresql://media:media@postgres:5432/media_organizor
       - DATABASE_URL=postgresql+asyncpg://media:media@postgres:5432/media_organizor
       - REDIS_URL=redis://redis:6379/0
+      - SETTINGS_FILE=/app/data/settings.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,6 +113,7 @@ volumes:
   redis_data:
   media_data:
   download_data:
+  app_data:
   qbittorrent_config:
   prowlarr_data:
   jellyfin_config:

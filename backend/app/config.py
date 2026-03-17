@@ -69,7 +69,8 @@ class Settings(BaseSettings):
     setup_complete: bool = False
 
     class Config:
-        env_file = ".env"
+        # Load defaults from .env (dev), then runtime overrides from /app/data/settings.env
+        env_file = [".env", "/app/data/settings.env"]
         case_sensitive = False
 
 

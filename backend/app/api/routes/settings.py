@@ -1,19 +1,22 @@
 """Settings and AI provider management endpoints."""
 import os
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import httpx
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
+# Settings are stored in a dedicated data volume so Docker bind-mount issues
+# (host directory created instead of file) never occur.
+ENV_PATH = os.environ.get("SETTINGS_FILE", "/app/data/settings.env")
+
 
 def _read_env() -> dict:
-    """Read current .env file into dict."""
-    env_path = ".env"
+    """Read current settings file into dict."""
     data = {}
-    if os.path.exists(env_path):
-        with open(env_path) as f:
+    if os.path.isfile(ENV_PATH):
+        with open(ENV_PATH) as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
@@ -23,15 +26,16 @@ def _read_env() -> dict:
 
 
 def _write_env(updates: dict):
-    """Write updates to .env file."""
-    env_path = ".env"
-    existing = _read_env()
-    existing.update(updates)
-    lines = []
-    for k, v in existing.items():
-        lines.append(f"{k}={v}")
-    with open(env_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    """Persist updates to the settings file."""
+    try:
+        os.makedirs(os.path.dirname(ENV_PATH), exist_ok=True)
+        existing = _read_env()
+        existing.update(updates)
+        lines = [f"{k}={v}" for k, v in existing.items()]
+        with open(ENV_PATH, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write settings: {exc}")
 
 
 @router.get("/")
