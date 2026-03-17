@@ -139,7 +139,8 @@ export default function SetupPage() {
         body: JSON.stringify({ url: s.url, username: s.username, password: s.password }),
       });
       const data = await safeJson(res);
-      setSvcs((p) => ({ ...p, [id]: { ...p[id], validating: false, connected: !!data.connected, error: data.connected ? "" : (data.error || "Could not connect") } }));
+      const warn = data.warning ? ` (${data.warning})` : "";
+      setSvcs((p) => ({ ...p, [id]: { ...p[id], validating: false, connected: !!data.connected, error: data.connected ? warn : (data.error || "Could not connect") } }));
     } catch (e: any) {
       setSvcs((p) => ({ ...p, [id]: { ...p[id], validating: false, error: e.message } }));
     }
@@ -341,7 +342,7 @@ export default function SetupPage() {
                             <input type="password" placeholder="API Key (optional — Dashboard → API Keys)" value={s.apiKey} onChange={(e) => updateSvc(svc.id, { apiKey: e.target.value })}
                               className="w-full bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-500" />
                           )}
-                          {s.error && <p className="text-red-400 text-xs">{s.error}</p>}
+                          {s.error && <p className={`text-xs ${s.connected ? "text-yellow-400" : "text-red-400"}`}>{s.error}</p>}
                           <div className="flex gap-2">
                             <button onClick={() => validateSvc(svc.id)} disabled={s.validating}
                               className="flex-1 bg-accent-500/20 hover:bg-accent-500/30 text-accent-400 py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-1">
@@ -396,7 +397,7 @@ export default function SetupPage() {
                             <input type="password" placeholder="API Key (optional — Dashboard → API Keys)" value={s.apiKey} onChange={(e) => updateSvc(svc.id, { apiKey: e.target.value })}
                               className="w-full bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-500" />
                           )}
-                          {s.error && <p className="text-red-400 text-xs">{s.error}</p>}
+                          {s.error && <p className={`text-xs ${s.connected ? "text-yellow-400" : "text-red-400"}`}>{s.error}</p>}
                           <div className="flex gap-2">
                             <button onClick={() => validateSvc(svc.id)} disabled={s.validating}
                               className="flex-1 bg-accent-500/20 hover:bg-accent-500/30 text-accent-400 py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-1">

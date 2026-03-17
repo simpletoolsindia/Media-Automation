@@ -28,6 +28,7 @@ SERVICES = {
             f"{STORAGE_PATH}/downloads": {"bind": "/downloads", "mode": "rw"},
         },
         "default_port": 1116,
+        "common_ports": [8080],          # default qBittorrent WebUI port
         "detect_paths": ["/api/v2/app/version"],
         "needs_credentials": True,
     },
@@ -41,7 +42,8 @@ SERVICES = {
             f"{PROJECT}_prowlarr_data": {"bind": "/config", "mode": "rw"},
         },
         "default_port": 1118,
-        "detect_paths": ["/", "/api/v1/health"],
+        "common_ports": [9696],          # default Prowlarr port
+        "detect_paths": ["/api/v1/health", "/login", "/"],
         "needs_credentials": False,
     },
     "jellyfin": {
@@ -55,6 +57,7 @@ SERVICES = {
             f"{STORAGE_PATH}/media": {"bind": "/media", "mode": "ro"},
         },
         "default_port": 1119,
+        "common_ports": [8096],          # default Jellyfin port
         "detect_paths": ["/health", "/System/Ping", "/"],
         "needs_credentials": False,
     },
@@ -67,13 +70,12 @@ def _make_client(timeout: float = 5.0) -> httpx.AsyncClient:
 
 
 async def _try_reach(base_url: str, paths: list[str]) -> bool:
-    """Return True if any path on base_url responds with status < 500."""
+    """Return True if any path on base_url gets any HTTP response (even 5xx = service is up)."""
     async with _make_client(timeout=3.0) as client:
         for path in paths:
             try:
-                r = await client.get(f"{base_url}{path}")
-                if r.status_code < 500:
-                    return True
+                await client.get(f"{base_url}{path}")
+                return True   # any HTTP response = server is running
             except Exception:
                 continue
     return False
@@ -86,6 +88,16 @@ def _docker_client():
         return docker_sdk.from_env()
     except Exception:
         return None
+
+
+def _candidate_urls(cfg: dict) -> list[str]:
+    """Return all (base_url, is_host_docker) candidates to probe, preferred first."""
+    ports = [cfg["default_port"]] + cfg.get("common_ports", [])
+    candidates = []
+    for port in ports:
+        candidates.append(f"http://localhost:{port}")
+        candidates.append(f"http://host.docker.internal:{port}")
+    return candidates
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -105,7 +117,8 @@ async def list_services():
 @router.get("/detect/{service}")
 async def detect_service(service: str):
     """
-    Try to reach the service on common ports / host gateway.
+    Try to reach the service on our mapped port AND the standard default port.
+    Returns the URL that actually responded, normalised to localhost.
     Always returns JSON {found, url} — never raises.
     """
     if service not in SERVICES:
@@ -113,16 +126,14 @@ async def detect_service(service: str):
 
     cfg = SERVICES[service]
     default_url = f"http://localhost:{cfg['default_port']}"
-    candidates = [
-        f"http://localhost:{cfg['default_port']}",
-        f"http://host.docker.internal:{cfg['default_port']}",
-    ]
 
-    for base in candidates:
+    for base in _candidate_urls(cfg):
         if await _try_reach(base, cfg["detect_paths"]):
-            return {"found": True, "url": default_url}
+            # Normalise: always give back a localhost URL (works from browser)
+            found_url = base.replace("host.docker.internal", "localhost")
+            return {"found": True, "url": found_url}
 
-    # Fallback: check via Docker SDK (optional — safe if socket not mounted)
+    # Fallback: container exists in Docker? (socket may not be mounted — safe if not)
     dc = _docker_client()
     if dc:
         try:
@@ -240,7 +251,11 @@ class ValidateRequest(BaseModel):
 async def validate_service(service: str, body: ValidateRequest):
     """
     Test connectivity to a user-provided URL.
-    Accepts HTTPS with self-signed certs, follows redirects.
+    Strategy:
+      - Try the given URL directly.
+      - If that fails to connect, also try host.docker.internal substitution.
+      - Any HTTP response (even 5xx) means the service is running.
+      - qBittorrent: also verify credentials via login API.
     """
     if service not in SERVICES:
         raise HTTPException(status_code=404, detail="Unknown service")
@@ -248,34 +263,47 @@ async def validate_service(service: str, body: ValidateRequest):
     cfg = SERVICES[service]
     url = body.url.rstrip("/")
 
-    try:
-        async with _make_client(timeout=8.0) as client:
-            if service == "qbittorrent" and body.username:
-                resp = await client.post(
-                    f"{url}/api/v2/auth/login",
-                    data={"username": body.username, "password": body.password or ""},
-                )
-                ok = resp.text.strip() == "Ok."
-                if not ok:
-                    return {"connected": False, "error": f"Login failed (got: {resp.text.strip()[:60]!r})"}
-            else:
-                # Try each detect path; succeed if any returns < 500
-                ok = False
-                for path in cfg["detect_paths"]:
-                    try:
-                        r = await client.get(f"{url}{path}")
-                        if r.status_code < 500:
-                            ok = True
-                            break
-                    except Exception:
-                        continue
-                if not ok:
-                    return {"connected": False, "error": "Service reachable but returned error — check URL"}
+    # Build list of URLs to try: user's URL first, then host.docker.internal variant
+    urls_to_try = [url]
+    if "localhost" in url:
+        urls_to_try.append(url.replace("localhost", "host.docker.internal"))
 
-        return {"connected": True, "url": url}
-    except httpx.ConnectError as exc:
-        return {"connected": False, "error": f"Cannot connect: {exc}"}
-    except httpx.TimeoutException:
-        return {"connected": False, "error": "Connection timed out — check URL and firewall"}
-    except Exception as exc:
-        return {"connected": False, "error": str(exc)}
+    last_error = "Cannot connect — check URL and port"
+
+    for try_url in urls_to_try:
+        try:
+            async with _make_client(timeout=8.0) as client:
+                if service == "qbittorrent" and body.username:
+                    resp = await client.post(
+                        f"{try_url}/api/v2/auth/login",
+                        data={"username": body.username, "password": body.password or ""},
+                    )
+                    if resp.text.strip() == "Ok.":
+                        return {"connected": True, "url": url}
+                    # Wrong credentials — no point trying other URL
+                    return {"connected": False, "error": f"Login failed (got: {resp.text.strip()[:60]!r})"}
+                else:
+                    # Any HTTP response = service is reachable
+                    for path in cfg["detect_paths"]:
+                        try:
+                            r = await client.get(f"{try_url}{path}")
+                            status = r.status_code
+                            if status < 500:
+                                return {"connected": True, "url": url}
+                            # 5xx — service is up but has an error; still consider connected
+                            return {"connected": True, "url": url, "warning": f"Service responded with HTTP {status} — it may need configuration"}
+                        except Exception:
+                            continue
+                    last_error = "Service unreachable on all paths — check URL"
+
+        except httpx.ConnectError:
+            last_error = f"Cannot connect to {try_url} — check URL and port"
+            continue   # try host.docker.internal variant
+        except httpx.TimeoutException:
+            last_error = "Connection timed out — check URL and firewall"
+            continue
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+
+    return {"connected": False, "error": last_error}
