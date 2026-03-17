@@ -80,13 +80,19 @@ export default function SetupPage() {
 
   const prov = AI_PROVIDERS.find((p) => p.id === provider)!;
 
+  // ── Safe JSON fetch — never throws on non-JSON responses ──────────────────
+  const safeJson = async (res: Response) => {
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { return { error: text.slice(0, 120) }; }
+  };
+
   // ── Auto-detect all services when entering step 1 ──────────────────────────
   const detectAll = useCallback(async () => {
     for (const svc of SVC_DEFS) {
-      setSvcs((prev) => ({ ...prev, [svc.id]: { ...prev[svc.id], mode: "detecting" } }));
+      setSvcs((prev) => ({ ...prev, [svc.id]: { ...prev[svc.id], mode: "detecting", error: "" } }));
       try {
         const res = await fetch(`/api/services/detect/${svc.id}`);
-        const data = await res.json();
+        const data = await safeJson(res);
         setSvcs((prev) => ({
           ...prev,
           [svc.id]: { ...prev[svc.id], mode: data.found ? "found" : "not_found", url: data.url || prev[svc.id].url },
@@ -114,8 +120,8 @@ export default function SetupPage() {
     setSvcs((p) => ({ ...p, [id]: { ...p[id], mode: "installing", error: "" } }));
     try {
       const res = await fetch(`/api/services/install/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Install failed");
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.detail || data.error || "Install failed");
       setSvcs((p) => ({ ...p, [id]: { ...p[id], mode: "done", url: data.url, connected: true } }));
     } catch (e: any) {
       setSvcs((p) => ({ ...p, [id]: { ...p[id], mode: "not_found", error: e.message } }));
@@ -131,8 +137,8 @@ export default function SetupPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: s.url, username: s.username, password: s.password }),
       });
-      const data = await res.json();
-      setSvcs((p) => ({ ...p, [id]: { ...p[id], validating: false, connected: data.connected, error: data.connected ? "" : (data.error || "Could not connect") } }));
+      const data = await safeJson(res);
+      setSvcs((p) => ({ ...p, [id]: { ...p[id], validating: false, connected: !!data.connected, error: data.connected ? "" : (data.error || "Could not connect") } }));
     } catch (e: any) {
       setSvcs((p) => ({ ...p, [id]: { ...p[id], validating: false, error: e.message } }));
     }

@@ -2,7 +2,6 @@
 import os
 import asyncio
 import httpx
-import docker as docker_sdk
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -29,7 +28,7 @@ SERVICES = {
             f"{STORAGE_PATH}/downloads": {"bind": "/downloads", "mode": "rw"},
         },
         "default_port": 1116,
-        "detect_path": "/api/v2/app/version",
+        "detect_paths": ["/api/v2/app/version"],
         "needs_credentials": True,
     },
     "prowlarr": {
@@ -42,7 +41,7 @@ SERVICES = {
             f"{PROJECT}_prowlarr_data": {"bind": "/config", "mode": "rw"},
         },
         "default_port": 1118,
-        "detect_path": "/",
+        "detect_paths": ["/", "/api/v1/health"],
         "needs_credentials": False,
     },
     "jellyfin": {
@@ -56,24 +55,43 @@ SERVICES = {
             f"{STORAGE_PATH}/media": {"bind": "/media", "mode": "ro"},
         },
         "default_port": 1119,
-        "detect_path": "/health",
+        "detect_paths": ["/health", "/System/Ping", "/"],
         "needs_credentials": False,
     },
 }
 
 
+def _make_client(timeout: float = 5.0) -> httpx.AsyncClient:
+    """httpx client that tolerates self-signed certs and follows redirects."""
+    return httpx.AsyncClient(timeout=timeout, verify=False, follow_redirects=True)
+
+
+async def _try_reach(base_url: str, paths: list[str]) -> bool:
+    """Return True if any path on base_url responds with status < 500."""
+    async with _make_client(timeout=3.0) as client:
+        for path in paths:
+            try:
+                r = await client.get(f"{base_url}{path}")
+                if r.status_code < 500:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def _docker_client():
+    """Return Docker SDK client or None (never raises)."""
     try:
+        import docker as docker_sdk
         return docker_sdk.from_env()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Docker socket unavailable: {exc}")
+    except Exception:
+        return None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/")
 async def list_services():
-    """Return all service definitions with their detect URLs."""
     result = {}
     for key, cfg in SERVICES.items():
         result[key] = {
@@ -87,45 +105,44 @@ async def list_services():
 @router.get("/detect/{service}")
 async def detect_service(service: str):
     """
-    Try to reach the service at common localhost ports.
-    Returns {found: bool, url: str}.
+    Try to reach the service on common ports / host gateway.
+    Always returns JSON {found, url} — never raises.
     """
     if service not in SERVICES:
         raise HTTPException(status_code=404, detail="Unknown service")
 
     cfg = SERVICES[service]
+    default_url = f"http://localhost:{cfg['default_port']}"
     candidates = [
         f"http://localhost:{cfg['default_port']}",
         f"http://host.docker.internal:{cfg['default_port']}",
     ]
 
-    for url in candidates:
+    for base in candidates:
+        if await _try_reach(base, cfg["detect_paths"]):
+            return {"found": True, "url": default_url}
+
+    # Fallback: check via Docker SDK (optional — safe if socket not mounted)
+    dc = _docker_client()
+    if dc:
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                await client.get(f"{url}{cfg['detect_path']}")
-            return {"found": True, "url": f"http://localhost:{cfg['default_port']}"}
+            containers = dc.containers.list(filters={"name": service})
+            if containers:
+                return {"found": True, "url": default_url, "via": "docker"}
         except Exception:
-            continue
+            pass
 
-    # Also check if container is running
-    try:
-        dc = _docker_client()
-        containers = dc.containers.list(filters={"name": service})
-        if containers:
-            return {"found": True, "url": f"http://localhost:{cfg['default_port']}", "via": "docker"}
-    except Exception:
-        pass
-
-    return {"found": False, "url": f"http://localhost:{cfg['default_port']}"}
+    return {"found": False, "url": default_url}
 
 
 @router.get("/status/{service}")
 async def service_status(service: str):
-    """Check if a service container exists and its state."""
     if service not in SERVICES:
         raise HTTPException(status_code=404, detail="Unknown service")
+    dc = _docker_client()
+    if not dc:
+        return {"running": False, "exists": False, "error": "Docker socket not available"}
     try:
-        dc = _docker_client()
         containers = dc.containers.list(all=True, filters={"name": service})
         if not containers:
             return {"running": False, "exists": False}
@@ -136,22 +153,22 @@ async def service_status(service: str):
 
 
 class InstallRequest(BaseModel):
-    restart: bool = False   # force recreate even if already running
+    restart: bool = False
 
 
 @router.post("/install/{service}")
 async def install_service(service: str, body: InstallRequest = InstallRequest()):
-    """
-    Pull the image and start the service container via Docker SDK.
-    The container joins the same compose network as the rest of the stack.
-    """
+    """Pull image and start container via Docker SDK."""
     if service not in SERVICES:
         raise HTTPException(status_code=404, detail="Unknown service")
 
-    cfg = SERVICES[service]
     dc = _docker_client()
+    if not dc:
+        raise HTTPException(status_code=500, detail="Docker socket not available — make sure /var/run/docker.sock is mounted in the backend container")
 
-    # Stop + remove existing container if restart requested
+    cfg = SERVICES[service]
+    import docker as docker_sdk
+
     if body.restart:
         try:
             existing = dc.containers.get(cfg["container_name"])
@@ -160,7 +177,7 @@ async def install_service(service: str, body: InstallRequest = InstallRequest())
         except docker_sdk.errors.NotFound:
             pass
 
-    # Check if already running
+    # Already exists?
     try:
         existing = dc.containers.get(cfg["container_name"])
         if existing.status == "running":
@@ -170,7 +187,7 @@ async def install_service(service: str, body: InstallRequest = InstallRequest())
     except docker_sdk.errors.NotFound:
         pass
 
-    # Pull image (may take a minute)
+    # Pull image
     try:
         dc.images.pull(cfg["image"])
     except Exception as exc:
@@ -184,10 +201,10 @@ async def install_service(service: str, body: InstallRequest = InstallRequest())
             except Exception:
                 pass
 
-    # Create and start container
+    # Create and start
     network_name = f"{PROJECT}_default"
     try:
-        container = dc.containers.run(
+        dc.containers.run(
             cfg["image"],
             name=cfg["container_name"],
             detach=True,
@@ -200,18 +217,17 @@ async def install_service(service: str, body: InstallRequest = InstallRequest())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start container: {exc}")
 
-    # Wait up to 15 s for the service to respond
+    # Wait up to 20s for ready
     url = f"http://localhost:{cfg['default_port']}"
-    for _ in range(15):
+    for _ in range(20):
         await asyncio.sleep(1)
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                await client.get(f"http://host.docker.internal:{cfg['default_port']}{cfg['detect_path']}")
+        if await _try_reach(
+            f"http://host.docker.internal:{cfg['default_port']}",
+            cfg["detect_paths"],
+        ):
             return {"status": "running", "url": url}
-        except Exception:
-            continue
 
-    return {"status": "starting", "url": url, "note": "Container started but not yet ready — try again in a moment"}
+    return {"status": "starting", "url": url, "note": "Started — may need a few more seconds"}
 
 
 class ValidateRequest(BaseModel):
@@ -222,22 +238,44 @@ class ValidateRequest(BaseModel):
 
 @router.post("/validate/{service}")
 async def validate_service(service: str, body: ValidateRequest):
-    """Test connectivity to a user-provided service URL."""
+    """
+    Test connectivity to a user-provided URL.
+    Accepts HTTPS with self-signed certs, follows redirects.
+    """
     if service not in SERVICES:
         raise HTTPException(status_code=404, detail="Unknown service")
 
     cfg = SERVICES[service]
+    url = body.url.rstrip("/")
+
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with _make_client(timeout=8.0) as client:
             if service == "qbittorrent" and body.username:
                 resp = await client.post(
-                    f"{body.url}/api/v2/auth/login",
-                    data={"username": body.username, "password": body.password},
+                    f"{url}/api/v2/auth/login",
+                    data={"username": body.username, "password": body.password or ""},
                 )
-                ok = resp.text == "Ok."
+                ok = resp.text.strip() == "Ok."
+                if not ok:
+                    return {"connected": False, "error": f"Login failed (got: {resp.text.strip()[:60]!r})"}
             else:
-                resp = await client.get(f"{body.url}{cfg['detect_path']}")
-                ok = resp.status_code < 500
-        return {"connected": ok, "url": body.url}
+                # Try each detect path; succeed if any returns < 500
+                ok = False
+                for path in cfg["detect_paths"]:
+                    try:
+                        r = await client.get(f"{url}{path}")
+                        if r.status_code < 500:
+                            ok = True
+                            break
+                    except Exception:
+                        continue
+                if not ok:
+                    return {"connected": False, "error": "Service reachable but returned error — check URL"}
+
+        return {"connected": True, "url": url}
+    except httpx.ConnectError as exc:
+        return {"connected": False, "error": f"Cannot connect: {exc}"}
+    except httpx.TimeoutException:
+        return {"connected": False, "error": "Connection timed out — check URL and firewall"}
     except Exception as exc:
         return {"connected": False, "error": str(exc)}
