@@ -1,0 +1,114 @@
+version: "3.9"
+
+services:
+  # ── Core ──────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: media
+      POSTGRES_PASSWORD: media
+      POSTGRES_DB: media_organizor
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U media"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  backend:
+    image: simpletoolsindia/media-organizor-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - media_data:/media
+      - download_data:/downloads
+      - ./backend/.env:/app/.env
+    environment:
+      - DATABASE_URL_SYNC=postgresql://media:media@postgres:5432/media_organizor
+      - DATABASE_URL=postgresql+asyncpg://media:media@postgres:5432/media_organizor
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    image: simpletoolsindia/media-organizor-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ── Media Stack (optional — comment out if you have existing services) ────
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - WEBUI_PORT=8080
+    volumes:
+      - qbittorrent_config:/config
+      - download_data:/downloads
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    restart: unless-stopped
+    profiles:
+      - full
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+    volumes:
+      - prowlarr_data:/config
+    ports:
+      - "9696:9696"
+    restart: unless-stopped
+    profiles:
+      - full
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    volumes:
+      - jellyfin_config:/config
+      - media_data:/media:ro
+    ports:
+      - "8096:8096"
+    restart: unless-stopped
+    profiles:
+      - full
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  download_data:
+  qbittorrent_config:
+  prowlarr_data:
+  jellyfin_config:
