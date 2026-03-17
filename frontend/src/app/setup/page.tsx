@@ -169,26 +169,33 @@ export default function SetupPage() {
   const saveServices = async () => {
     setSaving(true); setError("");
     try {
-      // Persist connected services
-      for (const svc of SVC_DEFS) {
-        const s = svcs[svc.id];
-        if (s.mode === "skipped") continue;
-        const updates: any = {};
-        if (svc.id === "qbittorrent" && (s.connected || s.mode === "done"))
-          updates.qbittorrent_url = s.url;
-        if (svc.id === "prowlarr" && (s.connected || s.mode === "done"))
-          updates.prowlarr_url = s.url;
-        if (svc.id === "jellyfin" && (s.connected || s.mode === "done")) {
-          updates.jellyfin_url = s.url;
-          if (s.apiKey) updates.jellyfin_api_key = s.apiKey;
-        }
-        if (Object.keys(updates).length) {
-          await fetch("/api/settings/general", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(updates),
-          });
-        }
+      const qbit = svcs["qbittorrent"];
+      const prowlarr = svcs["prowlarr"];
+      const jellyfin = svcs["jellyfin"];
+
+      // Build integrate payload from whatever services are connected / done
+      const payload: any = {};
+      if (qbit.mode !== "skipped" && (qbit.connected || qbit.mode === "done")) {
+        payload.qbittorrent_url      = qbit.url;
+        payload.qbittorrent_username = qbit.username;
+        payload.qbittorrent_password = qbit.password;
       }
+      if (prowlarr.mode !== "skipped" && (prowlarr.connected || prowlarr.mode === "done")) {
+        payload.prowlarr_url = prowlarr.url;
+      }
+      if (jellyfin.mode !== "skipped" && (jellyfin.connected || jellyfin.mode === "done")) {
+        payload.jellyfin_url = jellyfin.url;
+        if (jellyfin.apiKey) payload.jellyfin_api_key = jellyfin.apiKey;
+      }
+
+      // Single call: auto-fetches Prowlarr API key, links qBit in Prowlarr, saves all settings
+      if (Object.keys(payload).length) {
+        await fetch("/api/services/integrate", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
+
       setStep(2);
     } catch (e: any) { setError(e.message); } finally { setSaving(false); }
   };
