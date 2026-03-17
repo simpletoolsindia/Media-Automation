@@ -1,5 +1,6 @@
 """Settings and AI provider management endpoints."""
 import os
+import shutil
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -206,3 +207,50 @@ async def health_check():
     from app.config import Settings
     s = Settings()
     return {"status": "ok", "provider": s.ai_provider, "setup_complete": s.setup_complete}
+
+
+def _disk_info(path: str) -> dict:
+    """Return disk usage for a path (creates dir if missing)."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        total, used, free = shutil.disk_usage(path)
+        return {
+            "path": path,
+            "total_gb": round(total / 1024 ** 3, 1),
+            "used_gb": round(used / 1024 ** 3, 1),
+            "free_gb": round(free / 1024 ** 3, 1),
+            "used_pct": round(used / total * 100, 1) if total else 0,
+            "accessible": True,
+        }
+    except Exception as exc:
+        return {"path": path, "accessible": False, "error": str(exc)}
+
+
+@router.get("/storage")
+async def get_storage():
+    """Return storage paths and disk usage visible inside the container."""
+    from app.config import Settings
+    s = Settings()
+    storage_path = os.environ.get("STORAGE_PATH", "/mnt/data4tb")
+    return {
+        "storage_path": storage_path,          # host path (passed via env)
+        "media_root": s.media_root,            # container path
+        "downloads_path": s.downloads_path,    # container path
+        "media_disk": _disk_info(s.media_root),
+        "downloads_disk": _disk_info(s.downloads_path),
+    }
+
+
+@router.post("/storage")
+async def update_storage(body: GeneralSettings):
+    """Save media_root and downloads_path (container-internal paths)."""
+    updates = {}
+    if body.media_root:
+        updates["MEDIA_ROOT"] = body.media_root
+    if body.downloads_path:
+        updates["DOWNLOADS_PATH"] = body.downloads_path
+    if updates:
+        _write_env(updates)
+        from app.config import get_settings
+        get_settings.cache_clear()
+    return {"status": "ok"}

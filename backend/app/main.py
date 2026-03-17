@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.database import init_db
-from app.api.routes import media, downloads, organizer, settings, agent
+from app.api.routes import media, downloads, organizer, settings, agent, services
 
 
 @asynccontextmanager
@@ -33,6 +33,7 @@ app.include_router(downloads.router)
 app.include_router(organizer.router)
 app.include_router(settings.router)
 app.include_router(agent.router)
+app.include_router(services.router)
 
 
 @app.get("/")

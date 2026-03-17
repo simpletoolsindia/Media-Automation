@@ -1,7 +1,16 @@
 version: "3.9"
 
+# ── Quick start ────────────────────────────────────────────────────────────────
+#   docker compose up -d
+#
+# The setup wizard (http://your-server:1115) will guide you through
+# connecting or installing qBittorrent, Prowlarr and Jellyfin.
+#
+# To override the storage path (default /mnt/data4tb) edit .env:
+#   STORAGE_PATH=/your/drive
+
 services:
-  # ── Core ──────────────────────────────────────────────────────────────────
+  # ── Core (always on) ──────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     environment:
@@ -35,14 +44,17 @@ services:
     ports:
       - "1114:8000"
     volumes:
-      - media_data:/media
-      - download_data:/downloads
+      - ${STORAGE_PATH:-/mnt/data4tb}/media:/media
+      - ${STORAGE_PATH:-/mnt/data4tb}/downloads:/downloads
       - app_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock   # lets UI install services
     environment:
       - DATABASE_URL_SYNC=postgresql://media:media@postgres:5432/media_organizor
       - DATABASE_URL=postgresql+asyncpg://media:media@postgres:5432/media_organizor
       - REDIS_URL=redis://redis:6379/0
       - SETTINGS_FILE=/app/data/settings.env
+      - STORAGE_PATH=${STORAGE_PATH:-/mnt/data4tb}
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-media-organizor}
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,8 +75,12 @@ services:
       - backend
     restart: unless-stopped
 
-  # ── Media Stack (optional) ─────────────────────────────────────────────────
-  # Run with: docker compose --profile full up -d
+  # ── Optional media stack ───────────────────────────────────────────────────
+  # These are managed by the setup wizard, but you can also start them manually:
+  #   docker compose --profile qbittorrent up -d
+  #   docker compose --profile prowlarr up -d
+  #   docker compose --profile jellyfin up -d
+
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     environment:
@@ -74,13 +90,14 @@ services:
       - WEBUI_PORT=8080
     volumes:
       - qbittorrent_config:/config
-      - download_data:/downloads
+      - ${STORAGE_PATH:-/mnt/data4tb}/downloads:/downloads
     ports:
       - "1116:8080"
       - "1117:6881"
       - "1117:6881/udp"
     restart: unless-stopped
     profiles:
+      - qbittorrent
       - full
 
   prowlarr:
@@ -95,24 +112,24 @@ services:
       - "1118:9696"
     restart: unless-stopped
     profiles:
+      - prowlarr
       - full
 
   jellyfin:
     image: jellyfin/jellyfin:latest
     volumes:
       - jellyfin_config:/config
-      - media_data:/media:ro
+      - ${STORAGE_PATH:-/mnt/data4tb}/media:/media:ro
     ports:
       - "1119:8096"
     restart: unless-stopped
     profiles:
+      - jellyfin
       - full
 
 volumes:
   postgres_data:
   redis_data:
-  media_data:
-  download_data:
   app_data:
   qbittorrent_config:
   prowlarr_data:
